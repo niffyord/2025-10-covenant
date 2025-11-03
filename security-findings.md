@@ -28,3 +28,17 @@
 3. Any Covenant action that queries prices with `base == vault` now calls `resolveOracle`, which repeatedly recurses and eventually runs out of gas.
 
 **Remediation.** Reject configurations where `asset()` equals the vault itself or where adding the mapping would create a cycle; alternatively, track recursion depth and revert with a dedicated error once a limit is hit.
+
+## Medium – Router accepts itself as configured oracle, causing infinite recursion
+**Location.** `CovenantCurator.govSetConfig` and `govSetFallbackOracle` allow pointing an asset pair (or fallback) at any `IPriceOracle`, including the router itself, while `getQuote` and friends immediately delegate to the resolved oracle without cycle detection.【F:src/curators/CovenantCurator.sol†L39-L149】
+
+**Summary.** The router assumes every configured oracle is an external implementation. If governance (maliciously or by mistake) sets a pair’s oracle—or the global fallback—to `address(this)`, `resolveOracle` returns the router address and `getQuote` performs an external call back into itself. That second invocation repeats the same resolution, leading to unbounded recursion (`getQuote → resolveOracle → getQuote → …`) until the call stack/ gas limit is exhausted. Price queries for the affected pair therefore revert, freezing any Covenant action that needs that quote.
+
+**Impact.** A compromised governor or configuration error can permanently DoS all markets that depend on the misconfigured pair or fallback oracle, halting mint/redeem/swap flows despite the underlying LEX remaining healthy.
+
+**Steps to reproduce.**
+1. As governor, call `govSetConfig(base, quote, address(curator))` (or set `govSetFallbackOracle(address(curator))`).
+2. Invoke `getQuote` (or any pricing method) for that pair.
+3. The call loops until it runs out of gas because each hop re-enters the router without changing any state.
+
+**Remediation.** Reject configurations that resolve to the router itself (and ideally detect other cycles) or add recursion-depth tracking that fails fast with a descriptive error instead of blindly re-entering.
