@@ -11,13 +11,14 @@
 1. Start a market and craft `bytes[] outer` where `outer[0]` is an encoded `Covenant.multicall(inner)` and `outer[1]` is a zero-value mint/redeem.
 2. Let `inner` contain an oracle update that forwards non-zero `msgValue`.
 3. Invoke `Covenant.multicall{value: fee}(outer)`; the second outer payload reverts with `Errors.E_IncorrectPayment` because `_isMulticall` was reset by the nested call.
+   The repository already ships a regression test demonstrating this behaviour in `test/poc/MC01_NestedMulticall.t.sol` (see `test_nestedMulticall_breaksPaymentFlag`).【F:test/poc/MC01_NestedMulticall.t.sol†L52-L123】
 
 **Remediation.** Track multicall depth (e.g., increment/decrement a counter) or explicitly forbid nesting.
 
 ## Medium – Self-referential resolved vault bricks oracle routing
 **Location.** `CovenantCurator.govSetResolvedVault` records arbitrary ERC4626 assets without sanity checks; `resolveOracle` blindly recurses through `resolvedVaults` entries.【F:src/curators/CovenantCurator.sol†L67-L149】
 
-**Summary.** Governance can register any ERC4626 vault for recursive oracle resolution. If a configured vault reports itself (or any cycle of vaults) as its underlying asset, `resolveOracle` will recurse indefinitely because the base asset never changes. Every price lookup that touches that vault exhausts gas and reverts, breaking pricing for affected markets.
+**Summary.** Governance can register any ERC4626 vault for recursive oracle resolution. If a configured vault reports itself (or any cycle of vaults) as its underlying asset, `resolveOracle` will recurse indefinitely because the base asset never changes. Every price lookup that touches that vault exhausts gas and reverts, breaking pricing for affected markets. The recursion is triggered by the `resolvedVaults[base]` hop immediately followed by the recursive `return resolveOracle(...)` call, so a self-referential vault loops forever.【F:src/curators/CovenantCurator.sol†L118-L137】
 
 **Impact.** A single bad configuration (or compromised vault that changes `asset()`) permanently DoSes price resolution on every path that traverses the vault, halting mint/redeem/swap flows that rely on those quotes.
 
