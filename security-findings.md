@@ -42,3 +42,12 @@
 3. The call loops until it runs out of gas because each hop re-enters the router without changing any state.
 
 **Remediation.** Reject configurations that resolve to the router itself (and ideally detect other cycles) or add recursion-depth tracking that fails fast with a descriptive error instead of blindly re-entering.
+
+## Review Notes – LatentSwap LEX parameter governance
+Owner-accessible tuning is constrained to updating mint/redeem caps and token metadata, and the underlying math keeps per-market limits in place even after adjustments. `LatentSwapLEX` exposes only four `onlyOwner` mutators—`setDefaultNoCapLimit`, `setMarketNoCapLimit`, and metadata overrides—and validates market existence before per-market overrides apply.【F:src/lex/latentswap/LatentSwapLEX.sol†L135-L160】 Downstream, `_checkMintCap` and `_checkRedeemCap` bound inflows/outflows relative to current supply and ETWAP history, so even extreme `uint8` settings continue to gate throughput rather than bypassing collateral checks.【F:src/lex/latentswap/libraries/LatentSwapLogic.sol†L1051-L1098】
+
+## Review Notes – ValidationLogic coverage
+The shared validator enforces ID binding across all user operations, rejects zero-amount or zero-address submissions, and rechecks base-token availability on outputs. Mint/redeem flows first confirm the supplied `MarketParams` recompute the target `MarketId` before checking value limits and recipients, while swap validation also guards asset enum boundaries and base-supply exhaust cases.【F:src/libraries/ValidationLogic.sol†L17-L110】 These checks ensure calldata cannot redirect execution toward foreign markets or overdraft reserves even inside multicalls.
+
+## Review Notes – Synth token authorization path
+Each synth is minted with immutable references to both Covenant core and its LEX controller, and both contracts restrict who may invoke mint/burn. The `SynthToken` constructor locks `_lexCore` to the deploying LEX instance and gates `lexMint`/`lexBurn` behind `onlyLexCore`, preventing arbitrary inflation.【F:src/synths/SynthToken.sol†L11-L88】 During market initialization the LEX instantiates the synths with `lexCore = address(this)`, and all state-changing entry points (`initMarket`, `mint`, `redeem`, `swap`) are restricted to calls from Covenant core via `onlyCovenantCore`, so external actors cannot bypass Covenant’s validations to reach the synth authorizations directly.【F:src/lex/latentswap/LatentSwapLEX.sol†L200-L358】
